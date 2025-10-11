@@ -66,6 +66,21 @@
 
 ## 📊 实体属性
 
+## 安装后的实体列表：
+
+集成安装后会创建以下11个传感器实体：
+- `sensor.tian_free_daily_joke` (每日笑话)
+- `sensor.tian_free_morning_greeting` (早安心语) 
+- `sensor.tian_free_evening_greeting` (晚安心语)
+- `sensor.tian_free_poetry` (唐诗鉴赏)
+- `sensor.tian_free_song_ci` (最美宋词)
+- `sensor.tian_free_yuan_qu` (精选元曲)
+- `sensor.tian_free_history` (简说历史)
+- `sensor.tian_free_sentence` (古籍名句)
+- `sensor.tian_free_couplet` (经典对联)
+- `sensor.tian_free_maxim` (英文格言)
+- `sensor.tian_free_scrolling_content` (滚动内容)
+
 每个传感器实体都包含以下属性：
 - `title`: 实体标题
 - `code`: API返回状态码
