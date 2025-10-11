@@ -36,10 +36,10 @@
 ### 方法一：通过 HACS 安装（推荐）
 
 1. 确保已安装 [HACS](https://hacs.xyz/)
-2. 在 HACS 中点击「集成」
-3. 点击右下角「+ 浏览并下载仓库」
-4. 搜索「天聚数行免费版」并选择
-5. 点击「下载」
+2. 在 HACS 的 "Integrations" 页面，点击右上角的三个点菜单，选择 "Custom repositories"
+3. 在弹出窗口中添加仓库地址：https://github.com/lambilly/hass_tian_free/ ，类别选择 "Integration"
+4. 在 HACS 中搜索 "天聚数行免费版"
+5. 点击下载
 6. 重启 Home Assistant
 
 ### 方法二：手动安装
