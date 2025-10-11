@@ -1,0 +1,13 @@
+{
+  "name": "天聚数行免费版",
+  "render_readme": true,
+  "domains": ["sensor"],
+  "homeassistant": "2023.1.0",
+  "iot_class": "Cloud Polling",
+  "zip_release": false,
+  "filename": "tian_free.zip",
+  "hide_default_branch": true,
+  "persistent_directory": "tian_free",
+  "country": ["CN"],
+  "content_in_root": false
+}
