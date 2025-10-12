@@ -30,7 +30,6 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(hours=24)  # 每天更新一次
 
 # 全局缓存，避免重复调用API
 _data_cache = {}
@@ -74,16 +73,18 @@ async def async_setup_entry(
     # 记录集成加载成功
     _LOGGER.info("天聚数行免费版集成 v1.0.0 加载成功，实体已创建并开始首次更新")
 
-class TianJokeSensor(SensorEntity):
-    """天聚数行笑话传感器."""
-
+class BaseTianSensor(SensorEntity):
+    """天聚数行传感器基类."""
+    
+    # API传感器每24小时更新一次
+    SCAN_INTERVAL = timedelta(hours=24)
+    # 缓存时间12小时
+    CACHE_TIMEOUT = 43200
+    
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
         self._api_key = api_key
-        self._attr_name = "每日笑话"
-        self._attr_unique_id = f"{entry_id}_joke"
         self._attr_device_info = device_info
-        self._attr_icon = "mdi:emoticon-lol"
         self._state = "等待更新"
         self._attributes = {}
         self._available = True
@@ -103,60 +104,15 @@ class TianJokeSensor(SensorEntity):
         """Return True if entity is available."""
         return self._available
 
-    async def async_update(self):
-        """Update sensor data."""
-        try:
-            # 获取笑话数据
-            joke_data = await self._fetch_cached_data("joke", self._fetch_joke_data)
-            
-            if joke_data:
-                joke_list = joke_data.get("result", {}).get("list", [])
-                
-                if joke_list:
-                    joke_result = joke_list[0]
-                else:
-                    joke_result = {}
-                
-                # 设置状态为更新时间
-                current_time = self._get_current_time()
-                self._state = current_time
-                self._available = True
-                
-                # 设置属性
-                self._attributes = {
-                    "title": "每日笑话",
-                    "code": joke_data.get("code", 0),
-                    "name": joke_result.get("title", ""),  # 新增name属性
-                    "content": joke_result.get("content", ""),
-                    "update_time": current_time
-                }
-                
-                _LOGGER.info("天聚数行笑话更新成功")
-                
-            else:
-                self._available = False
-                self._state = "API请求失败"
-                _LOGGER.error("无法获取天聚数行笑话，请检查API密钥是否正确")
-                
-        except Exception as e:
-            _LOGGER.error("更新天聚数行笑话传感器时出错: %s", e)
-            self._available = False
-            self._state = f"更新失败: {str(e)}"
-
-    async def _fetch_joke_data(self):
-        """获取笑话数据."""
-        url = f"{JOKE_API_URL}?key={self._api_key}&num=1"
-        return await self._fetch_api_data(url)
-
     async def _fetch_cached_data(self, cache_key, fetch_func):
         """获取缓存数据，避免重复调用API."""
         global _data_cache, _cache_timestamp
         
-        # 检查缓存是否有效（1小时内）
+        # 检查缓存是否有效
         current_time = self._get_current_timestamp()
         if (cache_key in _data_cache and 
             cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
+            current_time - _cache_timestamp[cache_key] < self.CACHE_TIMEOUT):
             _LOGGER.debug("使用缓存数据: %s", cache_key)
             return _data_cache[cache_key]
         
@@ -209,34 +165,70 @@ class TianJokeSensor(SensorEntity):
         from datetime import datetime
         return int(datetime.now().timestamp())
 
-class TianMorningSensor(SensorEntity):
+class TianJokeSensor(BaseTianSensor):
+    """天聚数行笑话传感器."""
+
+    def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
+        """Initialize the sensor."""
+        super().__init__(api_key, device_info, entry_id)
+        self._attr_name = "每日笑话"
+        self._attr_unique_id = f"{entry_id}_joke"
+        self._attr_icon = "mdi:emoticon-lol"
+
+    async def async_update(self):
+        """Update sensor data."""
+        try:
+            # 获取笑话数据
+            joke_data = await self._fetch_cached_data("joke", self._fetch_joke_data)
+            
+            if joke_data:
+                joke_list = joke_data.get("result", {}).get("list", [])
+                
+                if joke_list:
+                    joke_result = joke_list[0]
+                else:
+                    joke_result = {}
+                
+                # 设置状态为更新时间
+                current_time = self._get_current_time()
+                self._state = current_time
+                self._available = True
+                
+                # 设置属性
+                self._attributes = {
+                    "title": "每日笑话",
+                    "code": joke_data.get("code", 0),
+                    "name": joke_result.get("title", ""),
+                    "content": joke_result.get("content", ""),
+                    "update_time": current_time
+                }
+                
+                _LOGGER.info("天聚数行笑话更新成功")
+                
+            else:
+                self._available = False
+                self._state = "API请求失败"
+                _LOGGER.error("无法获取天聚数行笑话，请检查API密钥是否正确")
+                
+        except Exception as e:
+            _LOGGER.error("更新天聚数行笑话传感器时出错: %s", e)
+            self._available = False
+            self._state = f"更新失败: {str(e)}"
+
+    async def _fetch_joke_data(self):
+        """获取笑话数据."""
+        url = f"{JOKE_API_URL}?key={self._api_key}&num=1"
+        return await self._fetch_api_data(url)
+
+class TianMorningSensor(BaseTianSensor):
     """天聚数行早安传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "早安心语"
         self._attr_unique_id = f"{entry_id}_morning"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:weather-sunny"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -283,95 +275,15 @@ class TianMorningSensor(SensorEntity):
         url = f"{MORNING_API_URL}?key={self._api_key}"
         return await self._fetch_api_data(url)
 
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
-
-class TianEveningSensor(SensorEntity):
+class TianEveningSensor(BaseTianSensor):
     """天聚数行晚安传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "晚安心语"
         self._attr_unique_id = f"{entry_id}_evening"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:weather-night"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -418,95 +330,15 @@ class TianEveningSensor(SensorEntity):
         url = f"{EVENING_API_URL}?key={self._api_key}"
         return await self._fetch_api_data(url)
 
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
-
-class TianPoetrySensor(SensorEntity):
+class TianPoetrySensor(BaseTianSensor):
     """天聚数行唐诗传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "唐诗鉴赏"
         self._attr_unique_id = f"{entry_id}_poetry"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:book-open-variant"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -528,7 +360,7 @@ class TianPoetrySensor(SensorEntity):
                     "title": "唐诗鉴赏",
                     "code": poetry_data.get("code", 0),
                     "content": poetry_first.get("content", ""),
-                    "source": poetry_first.get("title", ""),  # 新增source属性
+                    "source": poetry_first.get("title", ""),
                     "author": poetry_first.get("author", ""),
                     "intro": poetry_first.get("intro", ""),
                     "kind": poetry_first.get("kind", ""),
@@ -552,95 +384,15 @@ class TianPoetrySensor(SensorEntity):
         url = f"{POETRY_API_URL}?key={self._api_key}"
         return await self._fetch_api_data(url)
 
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
-
-class TianSongCiSensor(SensorEntity):
+class TianSongCiSensor(BaseTianSensor):
     """天聚数行宋词传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "最美宋词"
         self._attr_unique_id = f"{entry_id}_songci"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:book-music"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -661,7 +413,7 @@ class TianSongCiSensor(SensorEntity):
                     "title": "最美宋词",
                     "code": song_ci_data.get("code", 0),
                     "content": song_ci_result.get("content", ""),
-                    "source": song_ci_result.get("source", ""),  # 新增source属性
+                    "source": song_ci_result.get("source", ""),
                     "author": song_ci_result.get("author", ""),
                     "update_time": current_time
                 }
@@ -683,95 +435,15 @@ class TianSongCiSensor(SensorEntity):
         url = f"{SONG_CI_API_URL}?key={self._api_key}"
         return await self._fetch_api_data(url)
 
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
-
-class TianYuanQuSensor(SensorEntity):
+class TianYuanQuSensor(BaseTianSensor):
     """天聚数行元曲传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "精选元曲"
         self._attr_unique_id = f"{entry_id}_yuanqu"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:music"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -793,7 +465,7 @@ class TianYuanQuSensor(SensorEntity):
                     "title": "精选元曲",
                     "code": yuan_qu_data.get("code", 0),
                     "content": yuan_qu_first.get("content", ""),
-                    "source": yuan_qu_first.get("title", ""),  # 新增source属性
+                    "source": yuan_qu_first.get("title", ""),
                     "author": yuan_qu_first.get("author", ""),
                     "note": yuan_qu_first.get("note", ""),
                     "translation": yuan_qu_first.get("translation", ""),
@@ -817,95 +489,15 @@ class TianYuanQuSensor(SensorEntity):
         url = f"{YUAN_QU_API_URL}?key={self._api_key}&num=1&page=1"
         return await self._fetch_api_data(url)
 
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
-
-class TianHistorySensor(SensorEntity):
+class TianHistorySensor(BaseTianSensor):
     """天聚数行历史传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "简说历史"
         self._attr_unique_id = f"{entry_id}_history"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:calendar-clock"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -972,95 +564,15 @@ class TianHistorySensor(SensorEntity):
             _LOGGER.warning("未知的result类型: %s，返回默认值", type(result))
             return {}
 
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
-
-class TianSentenceSensor(SensorEntity):
+class TianSentenceSensor(BaseTianSensor):
     """天聚数行名句传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "古籍名句"
         self._attr_unique_id = f"{entry_id}_sentence"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:format-quote-close"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -1128,95 +640,15 @@ class TianSentenceSensor(SensorEntity):
             _LOGGER.warning("未知的result类型: %s，返回默认值", type(result))
             return {}
 
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
-
-class TianCoupletSensor(SensorEntity):
+class TianCoupletSensor(BaseTianSensor):
     """天聚数行对联传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "经典对联"
         self._attr_unique_id = f"{entry_id}_couplet"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:brush"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -1283,95 +715,15 @@ class TianCoupletSensor(SensorEntity):
             _LOGGER.warning("未知的result类型: %s，返回默认值", type(result))
             return {}
 
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
-
-class TianMaximSensor(SensorEntity):
+class TianMaximSensor(BaseTianSensor):
     """天聚数行格言传感器."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
-        self._api_key = api_key
+        super().__init__(api_key, device_info, entry_id)
         self._attr_name = "英文格言"
         self._attr_unique_id = f"{entry_id}_maxim"
-        self._attr_device_info = device_info
         self._attr_icon = "mdi:translate"
-        self._state = "等待更新"
-        self._attributes = {}
-        self._available = True
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes."""
-        return self._attributes
-
-    @property
-    def available(self):
-        """Return True if entity is available."""
-        return self._available
 
     async def async_update(self):
         """Update sensor data."""
@@ -1438,70 +790,12 @@ class TianMaximSensor(SensorEntity):
         else:
             _LOGGER.warning("未知的result类型: %s，返回默认值", type(result))
             return {}
-
-    async def _fetch_cached_data(self, cache_key, fetch_func):
-        """获取缓存数据，避免重复调用API."""
-        global _data_cache, _cache_timestamp
-        
-        # 检查缓存是否有效（1小时内）
-        current_time = self._get_current_timestamp()
-        if (cache_key in _data_cache and 
-            cache_key in _cache_timestamp and 
-            current_time - _cache_timestamp[cache_key] < 3600):  # 1小时缓存
-            _LOGGER.debug("使用缓存数据: %s", cache_key)
-            return _data_cache[cache_key]
-        
-        # 调用API获取新数据
-        data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
-            _data_cache[cache_key] = data
-            _cache_timestamp[cache_key] = current_time
-            _LOGGER.info("已更新缓存数据: %s", cache_key)
-        return data
-
-    async def _fetch_api_data(self, url: str):
-        """获取API数据."""
-        session = async_get_clientsession(self.hass)
-        
-        try:
-            async with async_timeout.timeout(15):
-                response = await session.get(url)
-                if response.status == 200:
-                    data = await response.json()
-                    _LOGGER.debug("API响应: %s", data)
-                    
-                    # 检查API返回的错误码
-                    if data.get("code") == 200:
-                        return data
-                    elif data.get("code") == 130:  # 频率限制
-                        _LOGGER.warning("API调用频率超限，请稍后再试")
-                        return None
-                    elif data.get("code") == 100:  # 常见错误码
-                        _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
-                    else:
-                        _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
-                else:
-                    _LOGGER.error("HTTP请求失败: %s", response.status)
-        except asyncio.TimeoutError:
-            _LOGGER.error("API请求超时")
-        except Exception as e:
-            _LOGGER.error("获取API数据时出错: %s", e)
-        
-        return None
-
-    def _get_current_time(self):
-        """获取当前时间字符串."""
-        from datetime import datetime
-        now = datetime.now()
-        return now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    def _get_current_timestamp(self):
-        """获取当前时间戳."""
-        from datetime import datetime
-        return int(datetime.now().timestamp())
         
 class TianScrollingContentSensor(SensorEntity):
     """天聚数行滚动内容传感器."""
+    
+    # 滚动内容每30分钟更新一次
+    SCAN_INTERVAL = timedelta(minutes=30)
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
@@ -1510,13 +804,11 @@ class TianScrollingContentSensor(SensorEntity):
         self._attr_unique_id = f"{entry_id}_scrolling_content"
         self._attr_device_info = device_info
         self._attr_icon = "mdi:message-text"
-        self._state = self._get_current_time()  # 初始状态设为当前时间
+        self._state = self._get_current_time()
         self._attributes = {}
         self._available = True
         self._current_time_slot = None
-        self._retry_count = 0
-        self._max_retries = 3
-        self._has_data = False  # 标记是否有数据
+        self._last_update_hour = -1
 
     @property
     def state(self):
@@ -1534,7 +826,7 @@ class TianScrollingContentSensor(SensorEntity):
         return self._available
 
     async def async_update(self):
-        """Update sensor data - 使用缓存数据，避免频繁调用API."""
+        """Update sensor data - 仅使用缓存数据，每30分钟更新一次."""
         # 首先更新状态为当前时间
         current_time = self._get_current_time()
         self._state = current_time
@@ -1542,24 +834,11 @@ class TianScrollingContentSensor(SensorEntity):
         try:
             # 检查缓存数据是否可用
             if not self._is_cache_ready():
-                self._retry_count += 1
-                if self._retry_count <= self._max_retries:
-                    _LOGGER.warning("滚动内容：等待其他传感器数据更新 (重试 %d/%d)", 
-                                   self._retry_count, self._max_retries)
-                    # 如果没有数据且是首次加载，设置默认提示信息
-                    if not self._has_data:
-                        self._set_default_attributes(current_time, "等待数据加载，请稍后重新加载")
-                    return
-                else:
-                    _LOGGER.error("滚动内容：无法获取数据，已达到最大重试次数")
-                    self._available = False
-                    # 设置错误提示信息
-                    self._set_default_attributes(current_time, "数据加载失败，请重新加载")
-                    return
+                # 设置默认属性
+                self._set_default_attributes(current_time, "等待数据加载，请稍后查看")
+                _LOGGER.debug("滚动内容：缓存数据未就绪")
+                return
 
-            # 重置重试计数
-            self._retry_count = 0
-            
             # 从缓存获取数据
             morning_data = _data_cache.get("morning", {})
             evening_data = _data_cache.get("evening", {})
@@ -1605,11 +884,10 @@ class TianScrollingContentSensor(SensorEntity):
             
             # 设置属性
             self._available = True
-            self._has_data = True
             
             self._attributes = {
                 "title": scrolling_content["title"],
-                "title2": scrolling_content["title2"],  # 修改为title2
+                "title2": scrolling_content["title2"],
                 "subtitle": scrolling_content["subtitle"],
                 "content1": scrolling_content["content1"],
                 "content2": scrolling_content["content2"],
@@ -1619,19 +897,18 @@ class TianScrollingContentSensor(SensorEntity):
                 "update_time": current_time
             }
             
-            _LOGGER.info("天聚数行滚动内容更新成功，当前时段: %s", scrolling_content["time_slot"])
+            _LOGGER.debug("天聚数行滚动内容更新成功，当前时段: %s", scrolling_content["time_slot"])
                 
         except Exception as e:
             _LOGGER.error("更新天聚数行滚动内容传感器时出错: %s", e)
             self._available = False
-            # 设置错误提示信息
-            self._set_default_attributes(current_time, f"更新失败: {str(e)}")
+            # 状态仍然是当前时间，不需要修改
 
     def _set_default_attributes(self, current_time, message):
         """设置默认属性，当没有数据时使用."""
         self._attributes = {
             "title": "滚动内容",
-            "title2": "滚动内容",  # 修改为title2
+            "title2": "滚动内容",
             "subtitle": "",
             "content1": message,
             "content2": message,
@@ -1747,12 +1024,12 @@ class TianScrollingContentSensor(SensorEntity):
         maxim_en = maxim_result.get("en", "No maxim available")
         maxim_zh = maxim_result.get("zh", "暂无格言")
         
-        # 时间段判断（删除了谜语时段，将其分配给其他内容）
+        # 时间段判断
         if total_minutes >= 5*60+30 and total_minutes < 8*60+30:  # 5:30-8:29
             title = "🌅早安问候"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": "",
                 "content1": morning_content,
                 "content2": morning_content,
@@ -1764,7 +1041,7 @@ class TianScrollingContentSensor(SensorEntity):
             title = "☘️英文格言"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": "",
                 "content1": f"【英文】{maxim_en}<br>【中文】{maxim_zh}",
                 "content2": f"【英文】{maxim_en}\n【中文】{maxim_zh}",
@@ -1776,7 +1053,7 @@ class TianScrollingContentSensor(SensorEntity):
             title = "🌻每日笑话"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": joke_title,
                 "content1": joke_content,
                 "content2": f"{joke_title}\n{joke_content}",
@@ -1784,23 +1061,23 @@ class TianScrollingContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "笑话时段"
             }
-        elif total_minutes >= 13*60 and total_minutes < 14*60+30:  # 13:00-14:29 (延长了名句时段)
+        elif total_minutes >= 13*60 and total_minutes < 14*60+30:  # 13:00-14:29
             title = "🌻古籍名句"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": f"《{sentence_source}》",
-                "content1": sentence_content_formatted,  # content1不含出处信息
-                "content2": f"《{sentence_source}》\n{sentence_content_plain}",  # content2包含出处信息
+                "content1": sentence_content_formatted,
+                "content2": f"《{sentence_source}》\n{sentence_content_plain}",
                 "align": "center",
                 "subalign": "center",
                 "time_slot": "名句时段"
             }
-        elif total_minutes >= 14*60+30 and total_minutes < 16*60:  # 14:30-15:59 (延长了对联时段)
+        elif total_minutes >= 14*60+30 and total_minutes < 16*60:  # 14:30-15:59
             title = "🔖经典对联"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": "",
                 "content1": couplet_content,
                 "content2": couplet_content,
@@ -1808,11 +1085,11 @@ class TianScrollingContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "对联时段"
             }
-        elif total_minutes >= 16*60 and total_minutes < 18*60:  # 16:00-17:59 (延长了历史时段)
+        elif total_minutes >= 16*60 and total_minutes < 18*60:  # 16:00-17:59
             title = "🏷️简说历史"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": "",
                 "content1": history_content,
                 "content2": history_content,
@@ -1824,10 +1101,10 @@ class TianScrollingContentSensor(SensorEntity):
             title = "🔖唐诗鉴赏"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": f"{poetry_author} · 《{poetry_title}》",
-                "content1": poetry_content_formatted,  # content1不含作者和标题信息
-                "content2": f"{poetry_author} · 《{poetry_title}》\n{poetry_content_plain}",  # content2包含作者和标题信息
+                "content1": poetry_content_formatted,
+                "content2": f"{poetry_author} · 《{poetry_title}》\n{poetry_content_plain}",
                 "align": "center",
                 "subalign": "center",
                 "time_slot": "唐诗时段"
@@ -1836,22 +1113,22 @@ class TianScrollingContentSensor(SensorEntity):
             title = "🌼最美宋词"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": song_ci_source,
-                "content1": song_ci_content_formatted,  # content1不含出处信息
-                "content2": f"{song_ci_source}\n{song_ci_content_plain}",  # content2包含出处信息
+                "content1": song_ci_content_formatted,
+                "content2": f"{song_ci_source}\n{song_ci_content_plain}",
                 "align": "center",
                 "subalign": "center",
                 "time_slot": "宋词时段"
             }
-        elif total_minutes >= 21*60 and total_minutes < 22*60+30:  # 21:00-22:29 (延长了元曲时段)
+        elif total_minutes >= 21*60 and total_minutes < 22*60+30:  # 21:00-22:29
             title = "🔖精选元曲"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": f"{yuan_qu_author} · 《{yuan_qu_title}》",
-                "content1": yuan_qu_content_formatted,  # content1不含作者和标题信息
-                "content2": f"{yuan_qu_author} · 《{yuan_qu_title}》\n{yuan_qu_content_plain}",  # content2包含作者和标题信息
+                "content1": yuan_qu_content_formatted,
+                "content2": f"{yuan_qu_author} · 《{yuan_qu_title}》\n{yuan_qu_content_plain}",
                 "align": "center",
                 "subalign": "center",
                 "time_slot": "元曲时段"
@@ -1860,7 +1137,7 @@ class TianScrollingContentSensor(SensorEntity):
             title = "🌃晚安问候"
             return {
                 "title": title,
-                "title2": self._remove_emoji(title),  # 修改为title2，移除表情符号
+                "title2": self._remove_emoji(title),
                 "subtitle": "",
                 "content1": evening_content,
                 "content2": evening_content,
