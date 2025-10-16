@@ -72,6 +72,18 @@
 - `update_time`: 最后更新时间
 - 其他内容相关属性
 
+## 卡片显示，需要在HACS安装：Lovelace HTML Jinja2 Template card 卡片
+```yaml
+type: custom:html-template-card
+content: >
+  {% set entity = 'sensor.gun_dong_nei_rong' %}<div style="color: white;"><p
+  align="left"><h3 style="color: white; margin-bottom: 0px;">【{{
+  state_attr(entity, 'title') }}】</h3><p align="{{ state_attr(entity,
+  'subalign') }}" style="color: yellow; margin: 0px 0;"><b>{{ state_attr(entity,
+  'subtitle') }}</b></p></div> <p align="{{ state_attr(entity, 'align') }}"
+  style="color: white; font-size: 1.0em; margin-top: 10px;">{{
+  state_attr(entity, 'content1') }}
+```
 ## 🕒 滚动内容时段安排
 
 滚动内容传感器会根据时间段自动切换显示内容：
