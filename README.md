@@ -72,7 +72,7 @@
 - `update_time`: 最后更新时间
 - 其他内容相关属性
 
-## 卡片显示，需要在HACS安装：Lovelace HTML Jinja2 Template card 卡片
+## 📰卡片显示，需要在HACS安装：Lovelace HTML Jinja2 Template card 卡片
 ```yaml
 type: custom:html-template-card
 content: >
