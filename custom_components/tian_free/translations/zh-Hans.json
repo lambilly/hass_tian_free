@@ -3,9 +3,10 @@
     "step": {
       "user": {
         "title": "设置天聚数行免费版API",
-        "description": "请输入您的天聚数行API密钥",
+        "description": "请输入您的天聚数行API密钥和滚动内容间隔",
         "data": {
-          "api_key": "API密钥"
+          "api_key": "API密钥",
+          "scroll_interval": "滚动内容间隔（分钟）"
         }
       }
     },
@@ -14,6 +15,17 @@
     },
     "abort": {
       "already_configured": "此API密钥已被配置"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "天聚数行免费版选项",
+        "description": "调整滚动内容间隔设置",
+        "data": {
+          "scroll_interval": "滚动内容间隔（分钟）"
+        }
+      }
     }
   }
 }
