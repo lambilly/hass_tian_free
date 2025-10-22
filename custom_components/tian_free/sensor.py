@@ -37,26 +37,25 @@ _LOGGER = logging.getLogger(__name__)
 # 全局缓存，避免重复调用API
 _data_cache = {}
 _cache_timestamp = {}
-_retry_count = {}  # 重试计数器
+_retry_count = {}
 
 class BaseTianSensor(SensorEntity):
     """天聚数行传感器基类."""
     
-    # API传感器每24小时更新一次
     SCAN_INTERVAL = timedelta(hours=24)
-    # 缓存时间12小时
     CACHE_TIMEOUT = 43200
     
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
         self._api_key = api_key
         self._attr_device_info = device_info
-        self._state = self._get_current_date()  # 初始状态设为当前日期
+        self._state = "等待更新"
         self._attributes = {}
         self._available = True
         self._entry_id = entry_id
         self._retry_count = 0
         self._max_retries = 2
+        self._last_api_update_time = None  # 记录API数据获取时间
 
     @property
     def state(self):
@@ -77,7 +76,6 @@ class BaseTianSensor(SensorEntity):
         """获取缓存数据，避免重复调用API."""
         global _data_cache, _cache_timestamp
         
-        # 检查缓存是否有效
         current_time = self._get_current_timestamp()
         if (cache_key in _data_cache and 
             cache_key in _cache_timestamp and 
@@ -85,11 +83,12 @@ class BaseTianSensor(SensorEntity):
             _LOGGER.debug("使用缓存数据: %s", cache_key)
             return _data_cache[cache_key]
         
-        # 调用API获取新数据
         data = await fetch_func()
-        if data and data.get("code") == 200:  # 确保数据有效
+        if data and data.get("code") == 200:
             _data_cache[cache_key] = data
             _cache_timestamp[cache_key] = current_time
+            # 记录API数据获取时间
+            self._last_api_update_time = self._get_current_time()
             _LOGGER.info("已更新缓存数据: %s", cache_key)
         return data
 
@@ -104,13 +103,12 @@ class BaseTianSensor(SensorEntity):
                     data = await response.json()
                     _LOGGER.debug("API响应: %s", data)
                     
-                    # 检查API返回的错误码
                     if data.get("code") == 200:
                         return data
-                    elif data.get("code") == 130:  # 频率限制
+                    elif data.get("code") == 130:
                         _LOGGER.warning("API调用频率超限，请稍后再试")
                         return None
-                    elif data.get("code") == 100:  # 常见错误码
+                    elif data.get("code") == 100:
                         _LOGGER.error("API密钥错误: %s", data.get("msg", "未知错误"))
                     else:
                         _LOGGER.error("API返回错误[%s]: %s", data.get("code"), data.get("msg", "未知错误"))
@@ -139,15 +137,12 @@ class BaseTianSensor(SensorEntity):
 
     async def _schedule_daily_update(self):
         """安排每日更新."""
-        # 计算到明天00:01的时间
         now = datetime.now()
         tomorrow = now.replace(hour=0, minute=1, second=0, microsecond=0) + timedelta(days=1)
         delay = (tomorrow - now).total_seconds()
         
-        # 安排定时器
         async def daily_update_callback(_):
             await self.async_update()
-            # 重新安排下一次更新
             await self._schedule_daily_update()
         
         self.hass.loop.call_later(delay, asyncio.create_task, daily_update_callback(None))
@@ -156,7 +151,6 @@ class BaseTianSensor(SensorEntity):
     async def async_added_to_hass(self):
         """当实体添加到Home Assistant时调用."""
         await super().async_added_to_hass()
-        # 安排每日更新
         await self._schedule_daily_update()
 
 class TianJokeSensor(BaseTianSensor):
@@ -172,61 +166,56 @@ class TianJokeSensor(BaseTianSensor):
     async def async_update(self):
         """Update sensor data."""
         try:
-            # 获取笑话数据
             joke_data = await self._fetch_cached_data("joke", self._fetch_joke_data)
             
             if joke_data:
                 joke_list = joke_data.get("result", {}).get("list", [])
+                joke_result = joke_list[0] if joke_list else {}
                 
-                if joke_list:
-                    joke_result = joke_list[0]
-                else:
-                    joke_result = {}
-                
-                # 设置状态为当前日期
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
                 
-                # 设置属性
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                
                 self._attributes = {
                     "title": "每日笑话",
                     "code": joke_data.get("code", 0),
                     "name": joke_result.get("title", ""),
                     "content": joke_result.get("content", ""),
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,  # API数据获取时间
                     "update_date": current_date
                 }
                 
                 _LOGGER.info("天聚数行笑话更新成功")
-                self._retry_count = 0  # 重置重试计数
+                self._retry_count = 0
                 
             else:
-                # 检查是否需要重试
                 if self._retry_count < self._max_retries:
                     self._retry_count += 1
                     _LOGGER.warning("笑话更新失败，将在30分钟后重试 (%d/%d)", 
                                    self._retry_count, self._max_retries)
                     
-                    # 安排30分钟后重试
                     async def retry_update(_):
                         await self.async_update()
                     
                     self.hass.loop.call_later(1800, asyncio.create_task, retry_update(None))
                 else:
                     self._available = False
-                    self._state = self._get_current_date()  # 即使失败也保持日期状态
+                    self._state = "API请求失败"
                     _LOGGER.error("无法获取天聚数行笑话，已达到最大重试次数")
                 
         except Exception as e:
             _LOGGER.error("更新天聚数行笑话传感器时出错: %s", e)
             self._available = False
-            self._state = self._get_current_date()  # 即使异常也保持日期状态
+            self._state = f"更新失败: {str(e)}"
 
     async def _fetch_joke_data(self):
         """获取笑话数据."""
         url = f"{JOKE_API_URL}?key={self._api_key}&num=1"
         return await self._fetch_api_data(url)
+
 
 class TianMorningSensor(BaseTianSensor):
     """天聚数行早安传感器."""
@@ -257,13 +246,16 @@ class TianMorningSensor(BaseTianSensor):
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
+
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
                     "title": "早安心语",
                     "code": morning_data.get("code", 0),
                     "content": morning_content,
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -313,13 +305,16 @@ class TianEveningSensor(BaseTianSensor):
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
+
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
                     "title": "晚安心语",
                     "code": evening_data.get("code", 0),
                     "content": evening_content,
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -364,6 +359,9 @@ class TianPoetrySensor(BaseTianSensor):
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
+
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -374,7 +372,7 @@ class TianPoetrySensor(BaseTianSensor):
                     "author": poetry_first.get("author", ""),
                     "intro": poetry_first.get("intro", ""),
                     "kind": poetry_first.get("kind", ""),
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -419,6 +417,9 @@ class TianSongCiSensor(BaseTianSensor):
                 self._state = current_date
                 self._available = True
                 
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+
                 # 设置属性
                 self._attributes = {
                     "title": "最美宋词",
@@ -426,7 +427,7 @@ class TianSongCiSensor(BaseTianSensor):
                     "content": song_ci_result.get("content", ""),
                     "source": song_ci_result.get("source", ""),
                     "author": song_ci_result.get("author", ""),
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -471,6 +472,9 @@ class TianYuanQuSensor(BaseTianSensor):
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
+
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -481,7 +485,7 @@ class TianYuanQuSensor(BaseTianSensor):
                     "author": yuan_qu_first.get("author", ""),
                     "note": yuan_qu_first.get("note", ""),
                     "translation": yuan_qu_first.get("translation", ""),
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -525,13 +529,16 @@ class TianHistorySensor(BaseTianSensor):
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
+
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
                     "title": "简说历史",
                     "code": history_data.get("code", 0),
                     "content": history_result.get("content", "暂无历史内容"),
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -601,6 +608,9 @@ class TianSentenceSensor(BaseTianSensor):
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
+
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -608,7 +618,7 @@ class TianSentenceSensor(BaseTianSensor):
                     "code": sentence_data.get("code", 0),
                     "content": sentence_result.get("content", "暂无名句内容"),
                     "source": sentence_result.get("source", "未知来源"),
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -678,13 +688,16 @@ class TianCoupletSensor(BaseTianSensor):
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
+
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
                     "title": "经典对联",
                     "code": couplet_data.get("code", 0),
                     "content": couplet_result.get("content", "暂无对联内容"),
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -754,6 +767,9 @@ class TianMaximSensor(BaseTianSensor):
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
+
+                # 使用API数据获取时间作为update_time
+                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -761,7 +777,7 @@ class TianMaximSensor(BaseTianSensor):
                     "code": maxim_data.get("code", 0),
                     "en": maxim_result.get("en", ""),
                     "zh": maxim_result.get("zh", ""),
-                    "update_time": self._get_current_time(),
+                    "update_time": update_time,
                     "update_date": current_date
                 }
                 
@@ -808,19 +824,20 @@ class TianMaximSensor(BaseTianSensor):
             _LOGGER.warning("未知的result类型: %s，返回默认值", type(result))
             return {}
 
-class TianRegularContentSensor(SensorEntity):
-    """天聚数行定期内容传感器（原滚动内容）."""
+class TianTimeSlotContentSensor(SensorEntity):
+    """天聚数行时段内容传感器（原定期内容）."""
 
     def __init__(self, api_key: str, device_info: DeviceInfo, entry_id: str):
         """Initialize the sensor."""
         self._api_key = api_key
-        self._attr_name = "定期内容"
-        self._attr_unique_id = f"{entry_id}_regular_content"
+        self._attr_name = "时段内容"
+        self._attr_unique_id = f"{entry_id}_time_slot_content"
         self._attr_device_info = device_info
         self._attr_icon = "mdi:calendar-clock"
-        self._state = self._get_current_date()  # 状态设为当前日期
+        self._state = self._get_current_date()
         self._attributes = {}
         self._available = True
+        self._last_time_slot = None
 
     @property
     def state(self):
@@ -838,90 +855,121 @@ class TianRegularContentSensor(SensorEntity):
         return self._available
 
     async def async_update(self):
-        """Update sensor data - 使用缓存数据."""
-        # 更新状态为当前日期
+        """Update sensor data - 使用缓存数据，时段变化时触发."""
         current_date = self._get_current_date()
         self._state = current_date
         
         try:
             # 检查缓存数据是否可用
             if not self._is_cache_ready():
-                # 设置默认属性
                 self._set_default_attributes(current_date, "等待数据加载，请稍后查看")
-                _LOGGER.debug("定期内容：缓存数据未就绪")
+                _LOGGER.debug("时段内容：缓存数据未就绪")
                 return
 
-            # 从缓存获取数据
-            morning_data = _data_cache.get("morning", {})
-            evening_data = _data_cache.get("evening", {})
-            maxim_data = _data_cache.get("maxim", {})
-            joke_data = _data_cache.get("joke", {})
-            sentence_data = _data_cache.get("sentence", {})
-            couplet_data = _data_cache.get("couplet", {})
-            history_data = _data_cache.get("history", {})
-            poetry_data = _data_cache.get("poetry", {})
-            song_ci_data = _data_cache.get("songci", {})
-            yuan_qu_data = _data_cache.get("yuanqu", {})
-
-            # 提取各数据内容
-            morning_content = morning_data.get("result", {}).get("content", "早安！新的一天开始了！")
-            evening_content = evening_data.get("result", {}).get("content", "晚安！好梦！")
-            maxim_result = maxim_data.get("result", {})
-            joke_list = joke_data.get("result", {}).get("list", [{}])
-            sentence_result = sentence_data.get("result", {})
-            couplet_result = couplet_data.get("result", {})
-            history_result = history_data.get("result", {})
-            poetry_list = poetry_data.get("result", {}).get("list", [{}])
-            song_ci_result = song_ci_data.get("result", {})
-            yuan_qu_list = yuan_qu_data.get("result", {}).get("list", [{}])
-
-            # 获取第一条数据
-            joke_first = joke_list[0] if joke_list else {}
-            poetry_first = poetry_list[0] if poetry_list else {}
-            yuan_qu_first = yuan_qu_list[0] if yuan_qu_list else {}
-
-            # 根据当前时间段确定显示内容
-            regular_content = self._get_regular_content(
-                morning_content,
-                evening_content,
-                maxim_result,
-                joke_first,
-                sentence_result,
-                couplet_result,
-                history_result,
-                poetry_first,
-                song_ci_result,
-                yuan_qu_first
-            )
+            # 获取当前时间段
+            current_time_slot = self._get_current_time_slot()
             
-            # 设置属性
-            self._available = True
-            
-            self._attributes = {
-                "title": regular_content["title"],
-                "title2": regular_content["title2"],
-                "subtitle": regular_content["subtitle"],
-                "content1": regular_content["content1"],
-                "content2": regular_content["content2"],
-                "align": regular_content["align"],
-                "subalign": regular_content["subalign"],
-                "time_slot": regular_content["time_slot"],  # 保留time_slot属性
-                "update_time": self._get_current_time(),
-                "update_date": current_date
-            }
-            
-            _LOGGER.debug("天聚数行定期内容更新成功，当前时段: %s", regular_content["time_slot"])
+            # 如果时段发生变化，则更新内容
+            if current_time_slot != self._last_time_slot:
+                self._last_time_slot = current_time_slot
+                
+                # 从缓存获取数据
+                morning_data = _data_cache.get("morning", {})
+                evening_data = _data_cache.get("evening", {})
+                maxim_data = _data_cache.get("maxim", {})
+                joke_data = _data_cache.get("joke", {})
+                sentence_data = _data_cache.get("sentence", {})
+                couplet_data = _data_cache.get("couplet", {})
+                history_data = _data_cache.get("history", {})
+                poetry_data = _data_cache.get("poetry", {})
+                song_ci_data = _data_cache.get("songci", {})
+                yuan_qu_data = _data_cache.get("yuanqu", {})
+
+                # 提取各数据内容
+                morning_content = morning_data.get("result", {}).get("content", "早安！新的一天开始了！")
+                evening_content = evening_data.get("result", {}).get("content", "晚安！好梦！")
+                maxim_result = maxim_data.get("result", {})
+                joke_list = joke_data.get("result", {}).get("list", [{}])
+                sentence_result = sentence_data.get("result", {})
+                couplet_result = couplet_data.get("result", {})
+                history_result = history_data.get("result", {})
+                poetry_list = poetry_data.get("result", {}).get("list", [{}])
+                song_ci_result = song_ci_data.get("result", {})
+                yuan_qu_list = yuan_qu_data.get("result", {}).get("list", [{}])
+
+                # 获取第一条数据
+                joke_first = joke_list[0] if joke_list else {}
+                poetry_first = poetry_list[0] if poetry_list else {}
+                yuan_qu_first = yuan_qu_list[0] if yuan_qu_list else {}
+
+                # 根据当前时间段确定显示内容
+                time_slot_content = self._get_time_slot_content(
+                    morning_content,
+                    evening_content,
+                    maxim_result,
+                    joke_first,
+                    sentence_result,
+                    couplet_result,
+                    history_result,
+                    poetry_first,
+                    song_ci_result,
+                    yuan_qu_first
+                )
+                
+                # 设置属性 - update_time为时段触发时的时间
+                self._available = True
+                
+                self._attributes = {
+                    "title": time_slot_content["title"],
+                    "title2": time_slot_content["title2"],
+                    "subtitle": time_slot_content["subtitle"],
+                    "content1": time_slot_content["content1"],
+                    "content2": time_slot_content["content2"],
+                    "align": time_slot_content["align"],
+                    "subalign": time_slot_content["subalign"],
+                    "time_slot": time_slot_content["time_slot"],
+                    "update_time": self._get_current_time(),  # 时段触发时的时间
+                    "update_date": current_date
+                }
+                
+                _LOGGER.debug("天聚数行时段内容更新成功，当前时段: %s", time_slot_content["time_slot"])
                 
         except Exception as e:
-            _LOGGER.error("更新天聚数行定期内容传感器时出错: %s", e)
+            _LOGGER.error("更新天聚数行时段内容传感器时出错: %s", e)
             self._available = False
-            self._state = self._get_current_date()  # 即使异常也保持日期状态
+
+    def _get_current_time_slot(self):
+        """获取当前时间段."""
+        from datetime import datetime
+        now = datetime.now()
+        total_minutes = now.hour * 60 + now.minute
+        
+        if total_minutes >= 5*60+30 and total_minutes < 8*60+30:
+            return "早安时段"
+        elif total_minutes >= 8*60+30 and total_minutes < 11*60:
+            return "格言时段"
+        elif total_minutes >= 11*60 and total_minutes < 13*60:
+            return "笑话时段"
+        elif total_minutes >= 13*60 and total_minutes < 14*60+30:
+            return "名句时段"
+        elif total_minutes >= 14*60+30 and total_minutes < 16*60:
+            return "对联时段"
+        elif total_minutes >= 16*60 and total_minutes < 18*60:
+            return "历史时段"
+        elif total_minutes >= 18*60 and total_minutes < 19*60+30:
+            return "唐诗时段"
+        elif total_minutes >= 19*60+30 and total_minutes < 21*60:
+            return "宋词时段"
+        elif total_minutes >= 21*60 and total_minutes < 22*60+30:
+            return "元曲时段"
+        else:
+            return "晚安时段"
 
     def _set_default_attributes(self, current_date, message):
         """设置默认属性，当没有数据时使用."""
         self._attributes = {
-            "title": "定期内容",
-            "title2": "定期内容",
+            "title": "时段内容",
+            "title2": "时段内容",
             "subtitle": "",
             "content1": message,
             "content2": message,
@@ -941,7 +989,6 @@ class TianRegularContentSensor(SensorEntity):
             if key not in _data_cache or not _data_cache[key]:
                 return False
         
-        # 检查是否有有效的结果数据
         for key in required_keys:
             data = _data_cache[key]
             if not data.get("result"):
@@ -954,7 +1001,6 @@ class TianRegularContentSensor(SensorEntity):
         if text is None:
             return ""
         text_str = str(text)
-        # 在中文标点符号（。？！）后面添加<br>，但不包括文本末尾
         return text_str.replace("。", "。<br>").replace("？", "？<br>").replace("！", "！<br>").replace("<br><br>", "<br>").rstrip("<br>")
 
     def _format_plain_breaks(self, text):
@@ -962,25 +1008,23 @@ class TianRegularContentSensor(SensorEntity):
         if text is None:
             return ""
         text_str = str(text)
-        # 在中文标点符号（。？！）后面添加\n，但不包括文本末尾
         return text_str.replace("。", "。\n").replace("？", "？\n").replace("！", "！\n").replace("\n\n", "\n").rstrip("\n")
 
     def _remove_emoji(self, text):
         """移除文本中的表情符号."""
         import re
-        # 匹配常见的表情符号
         emoji_pattern = re.compile("["
-                           u"\U0001F600-\U0001F64F"  # 表情符号
-                           u"\U0001F300-\U0001F5FF"  # 符号和象形文字
-                           u"\U0001F680-\U0001F6FF"  # 交通和地图符号
-                           u"\U0001F1E0-\U0001F1FF"  # 旗帜 (iOS)
+                           u"\U0001F600-\U0001F64F"
+                           u"\U0001F300-\U0001F5FF"
+                           u"\U0001F680-\U0001F6FF"
+                           u"\U0001F1E0-\U0001F1FF"
                            "]+", flags=re.UNICODE)
         return emoji_pattern.sub(r'', text)
 
-    def _get_regular_content(self, morning_content, evening_content, maxim_result, 
-                            joke_result, sentence_result, couplet_result, history_result,
-                            poetry_result, song_ci_result, yuan_qu_result):
-        """根据当前时间段获取定期内容."""
+    def _get_time_slot_content(self, morning_content, evening_content, maxim_result, 
+                              joke_result, sentence_result, couplet_result, history_result,
+                              poetry_result, song_ci_result, yuan_qu_result):
+        """根据当前时间段获取时段内容."""
         from datetime import datetime
         
         now = datetime.now()
@@ -1001,7 +1045,6 @@ class TianRegularContentSensor(SensorEntity):
         # 处理名句数据
         sentence_source = sentence_result.get("source", "古籍")
         sentence_content = sentence_result.get("content", "暂无名句内容")
-        # 对名句内容进行换行处理
         sentence_content_formatted = self._format_line_breaks(sentence_content)
         sentence_content_plain = self._format_plain_breaks(sentence_content)
         
@@ -1015,14 +1058,12 @@ class TianRegularContentSensor(SensorEntity):
         poetry_author = poetry_result.get("author", "未知作者")
         poetry_title = poetry_result.get("title", "无题")
         poetry_content = poetry_result.get("content", "暂无唐诗内容")
-        # 对唐诗内容进行换行处理
         poetry_content_formatted = self._format_line_breaks(poetry_content)
         poetry_content_plain = self._format_plain_breaks(poetry_content)
         
         # 处理宋词数据
         song_ci_source = song_ci_result.get("source", "宋词")
         song_ci_content = song_ci_result.get("content", "暂无宋词内容")
-        # 对宋词内容进行换行处理
         song_ci_content_formatted = self._format_line_breaks(song_ci_content)
         song_ci_content_plain = self._format_plain_breaks(song_ci_content)
         
@@ -1030,7 +1071,6 @@ class TianRegularContentSensor(SensorEntity):
         yuan_qu_author = yuan_qu_result.get("author", "未知作者")
         yuan_qu_title = yuan_qu_result.get("title", "无题")
         yuan_qu_content = yuan_qu_result.get("content", "暂无元曲内容")
-        # 对元曲内容进行换行处理
         yuan_qu_content_formatted = self._format_line_breaks(yuan_qu_content)
         yuan_qu_content_plain = self._format_plain_breaks(yuan_qu_content)
         
@@ -1039,7 +1079,7 @@ class TianRegularContentSensor(SensorEntity):
         maxim_zh = maxim_result.get("zh", "暂无格言")
         
         # 时间段判断
-        if total_minutes >= 5*60+30 and total_minutes < 8*60+30:  # 5:30-8:29
+        if total_minutes >= 5*60+30 and total_minutes < 8*60+30:
             title = "🌅早安问候"
             return {
                 "title": title,
@@ -1051,7 +1091,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "早安时段"
             }
-        elif total_minutes >= 8*60+30 and total_minutes < 11*60:  # 8:30-10:59
+        elif total_minutes >= 8*60+30 and total_minutes < 11*60:
             title = "☘️英文格言"
             return {
                 "title": title,
@@ -1063,7 +1103,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "格言时段"
             }
-        elif total_minutes >= 11*60 and total_minutes < 13*60:  # 11:00-12:59
+        elif total_minutes >= 11*60 and total_minutes < 13*60:
             title = "🌻每日笑话"
             return {
                 "title": title,
@@ -1075,7 +1115,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "笑话时段"
             }
-        elif total_minutes >= 13*60 and total_minutes < 14*60+30:  # 13:00-14:29
+        elif total_minutes >= 13*60 and total_minutes < 14*60+30:
             title = "🌻古籍名句"
             return {
                 "title": title,
@@ -1087,7 +1127,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "名句时段"
             }
-        elif total_minutes >= 14*60+30 and total_minutes < 16*60:  # 14:30-15:59
+        elif total_minutes >= 14*60+30 and total_minutes < 16*60:
             title = "🔖经典对联"
             return {
                 "title": title,
@@ -1099,7 +1139,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "对联时段"
             }
-        elif total_minutes >= 16*60 and total_minutes < 18*60:  # 16:00-17:59
+        elif total_minutes >= 16*60 and total_minutes < 18*60:
             title = "🏷️简说历史"
             return {
                 "title": title,
@@ -1111,7 +1151,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "历史时段"
             }
-        elif total_minutes >= 18*60 and total_minutes < 19*60+30:  # 18:00-19:29
+        elif total_minutes >= 18*60 and total_minutes < 19*60+30:
             title = "🔖唐诗鉴赏"
             return {
                 "title": title,
@@ -1123,7 +1163,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "唐诗时段"
             }
-        elif total_minutes >= 19*60+30 and total_minutes < 21*60:  # 19:30-20:59
+        elif total_minutes >= 19*60+30 and total_minutes < 21*60:
             title = "🌼最美宋词"
             return {
                 "title": title,
@@ -1135,7 +1175,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "宋词时段"
             }
-        elif total_minutes >= 21*60 and total_minutes < 22*60+30:  # 21:00-22:29
+        elif total_minutes >= 21*60 and total_minutes < 22*60+30:
             title = "🔖精选元曲"
             return {
                 "title": title,
@@ -1147,7 +1187,7 @@ class TianRegularContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "元曲时段"
             }
-        else:  # 22:30-次日5:29
+        else:
             title = "🌃晚安问候"
             return {
                 "title": title,
@@ -1180,12 +1220,12 @@ class TianScrollingContentSensor(SensorEntity):
         self._attr_unique_id = f"{entry_id}_scrolling_content"
         self._attr_device_info = device_info
         self._attr_icon = "mdi:message-text"
-        self._state = self._get_current_date()  # 状态设为当前日期
+        self._state = self._get_current_date()
         self._attributes = {}
         self._available = True
-        self._scroll_interval = scroll_interval  # 滚动间隔（分钟）
-        self._current_index = 0  # 当前显示的内容索引
-        self._content_types = SCROLL_CONTENT_TYPES
+        self._scroll_interval = scroll_interval
+        self._current_index = 0
+        self._content_types = SCROLL_CONTENT_TYPES  # 使用更新后的内容类型列表
         self._unsub_timer = None
 
     @property
@@ -1206,7 +1246,6 @@ class TianScrollingContentSensor(SensorEntity):
     async def async_added_to_hass(self):
         """当实体添加到Home Assistant时调用."""
         await super().async_added_to_hass()
-        # 开始滚动定时器
         self._start_scrolling_timer()
 
     async def async_will_remove_from_hass(self):
@@ -1217,11 +1256,9 @@ class TianScrollingContentSensor(SensorEntity):
 
     def _start_scrolling_timer(self):
         """启动滚动定时器."""
-        # 取消现有的定时器
         if self._unsub_timer:
             self._unsub_timer()
         
-        # 设置新的定时器
         self._unsub_timer = async_track_time_interval(
             self.hass,
             self._update_scrolling_content,
@@ -1230,31 +1267,23 @@ class TianScrollingContentSensor(SensorEntity):
         
         _LOGGER.info("滚动内容定时器已启动，间隔: %d 分钟", self._scroll_interval)
         
-        # 立即更新一次内容
         self.hass.async_create_task(self._update_scrolling_content(None))
 
     async def _update_scrolling_content(self, _):
         """更新滚动内容."""
-        # 更新状态为当前日期
         current_date = self._get_current_date()
         self._state = current_date
         
         try:
-            # 检查缓存数据是否可用
             if not self._is_cache_ready():
-                # 设置默认属性
                 self._set_default_attributes(current_date, "等待数据加载，请稍后查看")
                 _LOGGER.debug("滚动内容：缓存数据未就绪")
                 return
 
-            # 获取当前要显示的内容类型
             content_type = self._content_types[self._current_index]
-            
-            # 根据内容类型获取对应的数据和属性
             scrolling_content = self._get_content_by_type(content_type)
             
             if scrolling_content:
-                # 设置属性
                 self._available = True
                 
                 self._attributes = {
@@ -1265,15 +1294,12 @@ class TianScrollingContentSensor(SensorEntity):
                     "content2": scrolling_content["content2"],
                     "align": scrolling_content["align"],
                     "subalign": scrolling_content["subalign"],
-                    "content_type": content_type,  # 当前内容类型
-                    "scroll_interval": self._scroll_interval,  # 新增：滚动间隔属性
-                    "update_time": self._get_current_time(),
+                    "content_type": content_type,
+                    "update_time": self._get_current_time(),  # 滚动内容更新时的时间
                     "update_date": current_date
                 }
                 
                 _LOGGER.debug("滚动内容更新成功，当前类型: %s", content_type)
-                
-                # 更新索引，准备下一次显示
                 self._current_index = (self._current_index + 1) % len(self._content_types)
             else:
                 self._set_default_attributes(current_date, "无法获取内容数据")
@@ -1281,11 +1307,9 @@ class TianScrollingContentSensor(SensorEntity):
         except Exception as e:
             _LOGGER.error("更新滚动内容传感器时出错: %s", e)
             self._available = False
-            self._state = self._get_current_date()  # 即使异常也保持日期状态
 
     def _get_content_by_type(self, content_type):
         """根据内容类型获取对应的内容."""
-        # 从缓存获取数据
         data = _data_cache.get(content_type, {})
         
         if not data or not data.get("result"):
@@ -1293,7 +1317,6 @@ class TianScrollingContentSensor(SensorEntity):
         
         result = data.get("result", {})
         
-        # 根据内容类型处理不同的数据结构
         if content_type == "joke":
             joke_list = result.get("list", [{}])
             joke_result = joke_list[0] if joke_list else {}
@@ -1303,34 +1326,6 @@ class TianScrollingContentSensor(SensorEntity):
                 "subtitle": joke_result.get("title", "今日笑话"),
                 "content1": joke_result.get("content", "暂无笑话内容"),
                 "content2": f"{joke_result.get('title', '今日笑话')}\n{joke_result.get('content', '暂无笑话内容')}",
-                "align": "left",
-                "subalign": "center"
-            }
-        
-        elif content_type == "morning":
-            morning_content = result.get("content", "早安！新的一天开始了！")
-            if "早安" not in morning_content:
-                morning_content = f"早安！{morning_content}"
-            return {
-                "title": "🌅早安问候",
-                "title2": "早安问候",
-                "subtitle": "",
-                "content1": morning_content,
-                "content2": morning_content,
-                "align": "left",
-                "subalign": "center"
-            }
-        
-        elif content_type == "evening":
-            evening_content = result.get("content", "晚安！好梦！")
-            if "晚安" not in evening_content:
-                evening_content = f"{evening_content}晚安！"
-            return {
-                "title": "🌃晚安问候",
-                "title2": "晚安问候",
-                "subtitle": "",
-                "content1": evening_content,
-                "content2": evening_content,
                 "align": "left",
                 "subalign": "center"
             }
@@ -1365,15 +1360,30 @@ class TianScrollingContentSensor(SensorEntity):
                 "subalign": "center"
             }
         
-        elif content_type == "maxim":
-            maxim_en = result.get("en", "No maxim available")
-            maxim_zh = result.get("zh", "暂无格言")
+        elif content_type == "yuanqu":
+            yuan_qu_list = result.get("list", [{}])
+            yuan_qu_result = yuan_qu_list[0] if yuan_qu_list else {}
+            yuan_qu_content = yuan_qu_result.get("content", "暂无元曲内容")
+            yuan_qu_content_formatted = self._format_line_breaks(yuan_qu_content)
+            yuan_qu_content_plain = self._format_plain_breaks(yuan_qu_content)
             return {
-                "title": "☘️英文格言",
-                "title2": "英文格言",
+                "title": "🔖精选元曲",
+                "title2": "精选元曲",
+                "subtitle": f"{yuan_qu_result.get('author', '未知作者')} · 《{yuan_qu_result.get('title', '无题')}》",
+                "content1": yuan_qu_content_formatted,
+                "content2": f"{yuan_qu_result.get('author', '未知作者')} · 《{yuan_qu_result.get('title', '无题')}》\n{yuan_qu_content_plain}",
+                "align": "center",
+                "subalign": "center"
+            }
+        
+        elif content_type == "history":
+            history_content = result.get("content", "暂无历史内容")
+            return {
+                "title": "🏷️简说历史",
+                "title2": "简说历史",
                 "subtitle": "",
-                "content1": f"【英文】{maxim_en}<br>【中文】{maxim_zh}",
-                "content2": f"【英文】{maxim_en}\n【中文】{maxim_zh}",
+                "content1": history_content,
+                "content2": history_content,
                 "align": "left",
                 "subalign": "center"
             }
@@ -1405,31 +1415,16 @@ class TianScrollingContentSensor(SensorEntity):
                 "subalign": "center"
             }
         
-        elif content_type == "history":
-            history_content = result.get("content", "暂无历史内容")
+        elif content_type == "maxim":
+            maxim_en = result.get("en", "No maxim available")
+            maxim_zh = result.get("zh", "暂无格言")
             return {
-                "title": "🏷️简说历史",
-                "title2": "简说历史",
+                "title": "☘️英文格言",
+                "title2": "英文格言",
                 "subtitle": "",
-                "content1": history_content,
-                "content2": history_content,
+                "content1": f"【英文】{maxim_en}<br>【中文】{maxim_zh}",
+                "content2": f"【英文】{maxim_en}\n【中文】{maxim_zh}",
                 "align": "left",
-                "subalign": "center"
-            }
-        
-        elif content_type == "yuanqu":
-            yuan_qu_list = result.get("list", [{}])
-            yuan_qu_result = yuan_qu_list[0] if yuan_qu_list else {}
-            yuan_qu_content = yuan_qu_result.get("content", "暂无元曲内容")
-            yuan_qu_content_formatted = self._format_line_breaks(yuan_qu_content)
-            yuan_qu_content_plain = self._format_plain_breaks(yuan_qu_content)
-            return {
-                "title": "🔖精选元曲",
-                "title2": "精选元曲",
-                "subtitle": f"{yuan_qu_result.get('author', '未知作者')} · 《{yuan_qu_result.get('title', '无题')}》",
-                "content1": yuan_qu_content_formatted,
-                "content2": f"{yuan_qu_result.get('author', '未知作者')} · 《{yuan_qu_result.get('title', '无题')}》\n{yuan_qu_content_plain}",
-                "align": "center",
                 "subalign": "center"
             }
         
@@ -1446,7 +1441,6 @@ class TianScrollingContentSensor(SensorEntity):
             "align": "center",
             "subalign": "center",
             "content_type": "unknown",
-            "scroll_interval": self._scroll_interval,  # 新增：滚动间隔属性
             "update_time": self._get_current_time(),
             "update_date": current_date
         }
@@ -1503,7 +1497,7 @@ class TianScrollingContentSensor(SensorEntity):
             _LOGGER.info("滚动内容间隔已更新为: %d 分钟", new_interval)
         else:
             _LOGGER.error("无效的滚动间隔: %d，必须在1-60分钟之间", new_interval)
-        
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -1513,7 +1507,6 @@ async def async_setup_entry(
     api_key = config_entry.data[CONF_API_KEY]
     scroll_interval = config_entry.data.get(CONF_SCROLL_INTERVAL, 5)
     
-    # 创建设备信息
     device_info = DeviceInfo(
         identifiers={(DOMAIN, "tian_info_query")},
         name=DEVICE_NAME,
@@ -1522,7 +1515,6 @@ async def async_setup_entry(
         configuration_url="https://www.tianapi.com/",
     )
     
-    # 创建多个传感器实体
     sensors = [
         TianJokeSensor(api_key, device_info, config_entry.entry_id),
         TianMorningSensor(api_key, device_info, config_entry.entry_id),
@@ -1534,12 +1526,9 @@ async def async_setup_entry(
         TianSentenceSensor(api_key, device_info, config_entry.entry_id),
         TianCoupletSensor(api_key, device_info, config_entry.entry_id),
         TianMaximSensor(api_key, device_info, config_entry.entry_id),
-        TianRegularContentSensor(api_key, device_info, config_entry.entry_id),
+        TianTimeSlotContentSensor(api_key, device_info, config_entry.entry_id),  # 改为时段内容
         TianScrollingContentSensor(api_key, device_info, config_entry.entry_id, scroll_interval),
     ]
     
-    # 设置 update_before_add=True 确保首次添加时立即更新数据
     async_add_entities(sensors, update_before_add=True)
-    
-    # 记录集成加载成功
     _LOGGER.info("天聚数行免费版集成 v1.1.0 加载成功，实体已创建并开始首次更新")

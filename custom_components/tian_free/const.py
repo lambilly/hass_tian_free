@@ -2,10 +2,10 @@
 
 DOMAIN = "tian_free"
 NAME = "天聚数行免费版"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 CONF_API_KEY = "api_key"
-CONF_SCROLL_INTERVAL = "scroll_interval"  # 新增：滚动间隔配置
+CONF_SCROLL_INTERVAL = "scroll_interval"
 
 # API endpoints
 JOKE_API_URL = "https://apis.tianapi.com/joke/index"
@@ -20,12 +20,12 @@ COUPLET_API_URL = "https://apis.tianapi.com/duilian/index"
 MAXIM_API_URL = "https://apis.tianapi.com/enmaxim/index"
 
 # Device info
-DEVICE_NAME = "天聚信息查询"
+DEVICE_NAME = "信息查询"
 DEVICE_MANUFACTURER = "天聚数行"
 DEVICE_MODEL = "信息查询免费版"
 
-# 新增：轮换内容列表
+# 滚动内容类型列表
 SCROLL_CONTENT_TYPES = [
-    "joke", "morning", "evening", "poetry", "songci", 
-    "yuanqu", "history", "sentence", "couplet", "maxim"
+    "joke", "poetry", "songci", "yuanqu", 
+    "history", "sentence", "couplet", "maxim"
 ]
