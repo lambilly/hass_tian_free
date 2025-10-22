@@ -56,6 +56,7 @@ class BaseTianSensor(SensorEntity):
         self._retry_count = 0
         self._max_retries = 2
         self._last_api_update_time = None  # 记录API数据获取时间
+        self._data_fetched = False  # 标记数据是否已获取
 
     @property
     def state(self):
@@ -83,12 +84,14 @@ class BaseTianSensor(SensorEntity):
             _LOGGER.debug("使用缓存数据: %s", cache_key)
             return _data_cache[cache_key]
         
+        # 调用API获取新数据
         data = await fetch_func()
         if data and data.get("code") == 200:
             _data_cache[cache_key] = data
             _cache_timestamp[cache_key] = current_time
-            # 记录API数据获取时间
+            # 记录API数据获取时间 - 只在成功获取数据时更新
             self._last_api_update_time = self._get_current_time()
+            self._data_fetched = True
             _LOGGER.info("已更新缓存数据: %s", cache_key)
         return data
 
@@ -176,15 +179,15 @@ class TianJokeSensor(BaseTianSensor):
                 self._state = current_date
                 self._available = True
                 
-                # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                # 只在成功获取API数据时更新update_time，否则保持之前的值
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
                 
                 self._attributes = {
                     "title": "每日笑话",
                     "code": joke_data.get("code", 0),
                     "name": joke_result.get("title", ""),
                     "content": joke_result.get("content", ""),
-                    "update_time": update_time,  # API数据获取时间
+                    "update_time": update_time,  # API数据获取时间，24小时内保持不变
                     "update_date": current_date
                 }
                 
@@ -216,7 +219,6 @@ class TianJokeSensor(BaseTianSensor):
         url = f"{JOKE_API_URL}?key={self._api_key}&num=1"
         return await self._fetch_api_data(url)
 
-
 class TianMorningSensor(BaseTianSensor):
     """天聚数行早安传感器."""
 
@@ -230,52 +232,58 @@ class TianMorningSensor(BaseTianSensor):
     async def async_update(self):
         """Update sensor data."""
         try:
-            # 获取早安数据
             morning_data = await self._fetch_cached_data("morning", self._fetch_morning_data)
             
             if morning_data:
                 morning_content = morning_data.get("result", {}).get("content", "")
                 
-                # 优化早安内容处理逻辑
                 if not morning_content or morning_content == "":
                     morning_content = "早安！新的一天开始了！"
                 elif "早安" not in morning_content:
                     morning_content = f"早安！{morning_content}"
                 
-                # 设置状态为当前日期
                 current_date = self._get_current_date()
                 self._state = current_date
                 self._available = True
-
-                # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
                 
-                # 设置属性
+                # 只在成功获取API数据时更新update_time
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
+                
                 self._attributes = {
                     "title": "早安心语",
                     "code": morning_data.get("code", 0),
                     "content": morning_content,
-                    "update_time": update_time,
+                    "update_time": update_time,  # API数据获取时间，24小时内保持不变
                     "update_date": current_date
                 }
                 
                 _LOGGER.info("天聚数行早安更新成功")
+                self._retry_count = 0
                 
             else:
-                self._available = False
-                self._state = self._get_current_date()  # 即使失败也保持日期状态
-                _LOGGER.error("无法获取天聚数行早安，请检查API密钥是否正确")
+                if self._retry_count < self._max_retries:
+                    self._retry_count += 1
+                    _LOGGER.warning("早安更新失败，将在30分钟后重试 (%d/%d)", 
+                                   self._retry_count, self._max_retries)
+                    
+                    async def retry_update(_):
+                        await self.async_update()
+                    
+                    self.hass.loop.call_later(1800, asyncio.create_task, retry_update(None))
+                else:
+                    self._available = False
+                    self._state = "API请求失败"
+                    _LOGGER.error("无法获取天聚数行早安，已达到最大重试次数")
                 
         except Exception as e:
             _LOGGER.error("更新天聚数行早安传感器时出错: %s", e)
             self._available = False
-            self._state = self._get_current_date()  # 即使异常也保持日期状态
+            self._state = f"更新失败: {str(e)}"
 
     async def _fetch_morning_data(self):
         """获取早安数据."""
         url = f"{MORNING_API_URL}?key={self._api_key}"
         return await self._fetch_api_data(url)
-
 class TianEveningSensor(BaseTianSensor):
     """天聚数行晚安传感器."""
 
@@ -307,7 +315,7 @@ class TianEveningSensor(BaseTianSensor):
                 self._available = True
 
                 # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -361,7 +369,7 @@ class TianPoetrySensor(BaseTianSensor):
                 self._available = True
 
                 # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -418,7 +426,7 @@ class TianSongCiSensor(BaseTianSensor):
                 self._available = True
                 
                 # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
 
                 # 设置属性
                 self._attributes = {
@@ -474,7 +482,7 @@ class TianYuanQuSensor(BaseTianSensor):
                 self._available = True
 
                 # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -531,7 +539,7 @@ class TianHistorySensor(BaseTianSensor):
                 self._available = True
 
                 # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -610,7 +618,7 @@ class TianSentenceSensor(BaseTianSensor):
                 self._available = True
 
                 # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -690,7 +698,7 @@ class TianCoupletSensor(BaseTianSensor):
                 self._available = True
 
                 # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -769,7 +777,7 @@ class TianMaximSensor(BaseTianSensor):
                 self._available = True
 
                 # 使用API数据获取时间作为update_time
-                update_time = self._last_api_update_time if self._last_api_update_time else self._get_current_time()
+                update_time = self._last_api_update_time if self._data_fetched else self._get_current_time()
                 
                 # 设置属性
                 self._attributes = {
@@ -824,6 +832,7 @@ class TianMaximSensor(BaseTianSensor):
             _LOGGER.warning("未知的result类型: %s，返回默认值", type(result))
             return {}
 
+
 class TianTimeSlotContentSensor(SensorEntity):
     """天聚数行时段内容传感器（原定期内容）."""
 
@@ -838,6 +847,7 @@ class TianTimeSlotContentSensor(SensorEntity):
         self._attributes = {}
         self._available = True
         self._last_time_slot = None
+        self._last_update_time = None  # 记录时段触发更新时间
 
     @property
     def state(self):
@@ -872,6 +882,9 @@ class TianTimeSlotContentSensor(SensorEntity):
             # 如果时段发生变化，则更新内容
             if current_time_slot != self._last_time_slot:
                 self._last_time_slot = current_time_slot
+                
+                # 记录时段触发时间
+                self._last_update_time = self._get_current_time()
                 
                 # 从缓存获取数据
                 morning_data = _data_cache.get("morning", {})
@@ -928,11 +941,15 @@ class TianTimeSlotContentSensor(SensorEntity):
                     "align": time_slot_content["align"],
                     "subalign": time_slot_content["subalign"],
                     "time_slot": time_slot_content["time_slot"],
-                    "update_time": self._get_current_time(),  # 时段触发时的时间
+                    "update_time": self._last_update_time,  # 时段触发时的时间
                     "update_date": current_date
                 }
                 
                 _LOGGER.debug("天聚数行时段内容更新成功，当前时段: %s", time_slot_content["time_slot"])
+            else:
+                # 时段未变化，保持之前的update_time
+                if self._last_update_time:
+                    self._attributes["update_time"] = self._last_update_time
                 
         except Exception as e:
             _LOGGER.error("更新天聚数行时段内容传感器时出错: %s", e)
@@ -944,23 +961,23 @@ class TianTimeSlotContentSensor(SensorEntity):
         now = datetime.now()
         total_minutes = now.hour * 60 + now.minute
         
-        if total_minutes >= 5*60+30 and total_minutes < 8*60+30:
+        if total_minutes >= 5*60 and total_minutes < 8*60:
             return "早安时段"
-        elif total_minutes >= 8*60+30 and total_minutes < 11*60:
+        elif total_minutes >= 8*60 and total_minutes < 10*60:
             return "格言时段"
-        elif total_minutes >= 11*60 and total_minutes < 13*60:
+        elif total_minutes >= 10*60 and total_minutes < 12*60:
             return "笑话时段"
-        elif total_minutes >= 13*60 and total_minutes < 14*60+30:
+        elif total_minutes >= 12*60 and total_minutes < 14*60:
             return "名句时段"
-        elif total_minutes >= 14*60+30 and total_minutes < 16*60:
+        elif total_minutes >= 14*60 and total_minutes < 16*60:
             return "对联时段"
         elif total_minutes >= 16*60 and total_minutes < 18*60:
             return "历史时段"
-        elif total_minutes >= 18*60 and total_minutes < 19*60+30:
+        elif total_minutes >= 18*60 and total_minutes < 20*60:
             return "唐诗时段"
-        elif total_minutes >= 19*60+30 and total_minutes < 21*60:
+        elif total_minutes >= 20*60 and total_minutes < 22*60:
             return "宋词时段"
-        elif total_minutes >= 21*60 and total_minutes < 22*60+30:
+        elif total_minutes >= 22*60 and total_minutes < 23*60+59:
             return "元曲时段"
         else:
             return "晚安时段"
@@ -1079,7 +1096,7 @@ class TianTimeSlotContentSensor(SensorEntity):
         maxim_zh = maxim_result.get("zh", "暂无格言")
         
         # 时间段判断
-        if total_minutes >= 5*60+30 and total_minutes < 8*60+30:
+        if total_minutes >= 5*60 and total_minutes < 8*60:
             title = "🌅早安问候"
             return {
                 "title": title,
@@ -1091,7 +1108,7 @@ class TianTimeSlotContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "早安时段"
             }
-        elif total_minutes >= 8*60+30 and total_minutes < 11*60:
+        elif total_minutes >= 8*60 and total_minutes < 10*60:
             title = "☘️英文格言"
             return {
                 "title": title,
@@ -1103,7 +1120,7 @@ class TianTimeSlotContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "格言时段"
             }
-        elif total_minutes >= 11*60 and total_minutes < 13*60:
+        elif total_minutes >= 10*60 and total_minutes < 12*60:
             title = "🌻每日笑话"
             return {
                 "title": title,
@@ -1115,7 +1132,7 @@ class TianTimeSlotContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "笑话时段"
             }
-        elif total_minutes >= 13*60 and total_minutes < 14*60+30:
+        elif total_minutes >= 12*60 and total_minutes < 14*60:
             title = "🌻古籍名句"
             return {
                 "title": title,
@@ -1127,7 +1144,7 @@ class TianTimeSlotContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "名句时段"
             }
-        elif total_minutes >= 14*60+30 and total_minutes < 16*60:
+        elif total_minutes >= 14*60 and total_minutes < 16*60:
             title = "🔖经典对联"
             return {
                 "title": title,
@@ -1151,7 +1168,7 @@ class TianTimeSlotContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "历史时段"
             }
-        elif total_minutes >= 18*60 and total_minutes < 19*60+30:
+        elif total_minutes >= 18*60 and total_minutes < 20*60:
             title = "🔖唐诗鉴赏"
             return {
                 "title": title,
@@ -1163,7 +1180,7 @@ class TianTimeSlotContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "唐诗时段"
             }
-        elif total_minutes >= 19*60+30 and total_minutes < 21*60:
+        elif total_minutes >= 12*60 and total_minutes < 22*60:
             title = "🌼最美宋词"
             return {
                 "title": title,
@@ -1175,7 +1192,7 @@ class TianTimeSlotContentSensor(SensorEntity):
                 "subalign": "center",
                 "time_slot": "宋词时段"
             }
-        elif total_minutes >= 21*60 and total_minutes < 22*60+30:
+        elif total_minutes >= 22*60 and total_minutes < 23*60+59:
             title = "🔖精选元曲"
             return {
                 "title": title,
@@ -1227,6 +1244,7 @@ class TianScrollingContentSensor(SensorEntity):
         self._current_index = 0
         self._content_types = SCROLL_CONTENT_TYPES  # 使用更新后的内容类型列表
         self._unsub_timer = None
+        self._last_scroll_update_time = None  # 记录滚动内容更新时间
 
     @property
     def state(self):
@@ -1286,6 +1304,9 @@ class TianScrollingContentSensor(SensorEntity):
             if scrolling_content:
                 self._available = True
                 
+                # 记录滚动内容更新时间
+                self._last_scroll_update_time = self._get_current_time()
+                
                 self._attributes = {
                     "title": scrolling_content["title"],
                     "title2": scrolling_content["title2"],
@@ -1295,7 +1316,7 @@ class TianScrollingContentSensor(SensorEntity):
                     "align": scrolling_content["align"],
                     "subalign": scrolling_content["subalign"],
                     "content_type": content_type,
-                    "update_time": self._get_current_time(),  # 滚动内容更新时的时间
+                    "update_time": self._last_scroll_update_time,  # 滚动内容更新时的时间
                     "update_date": current_date
                 }
                 
@@ -1526,7 +1547,7 @@ async def async_setup_entry(
         TianSentenceSensor(api_key, device_info, config_entry.entry_id),
         TianCoupletSensor(api_key, device_info, config_entry.entry_id),
         TianMaximSensor(api_key, device_info, config_entry.entry_id),
-        TianTimeSlotContentSensor(api_key, device_info, config_entry.entry_id),  # 改为时段内容
+        TianTimeSlotContentSensor(api_key, device_info, config_entry.entry_id),
         TianScrollingContentSensor(api_key, device_info, config_entry.entry_id, scroll_interval),
     ]
     
