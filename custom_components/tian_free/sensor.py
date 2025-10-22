@@ -861,7 +861,7 @@ class TianTimeSlotContentSensor(SensorEntity):
         
         # 固定时段：早安和晚安
         time_slots["morning"] = {"start": 5*60, "end": 7*60+59, "name": "早安时段"}
-        time_slots["evening"] = {"start": 23*60, "end": 4*60+59, "name": "晚安时段"}
+        time_slots["evening"] = {"start": 22*60, "end": 4*60+59, "name": "晚安时段"}
         
         # 排除早安和晚安的启用API
         enabled_optional_apis = [api for api in self._enabled_apis if api not in ["morning", "evening"]]
@@ -869,8 +869,8 @@ class TianTimeSlotContentSensor(SensorEntity):
         if not enabled_optional_apis:
             return time_slots
         
-        # 计算剩余时段（8:00-22:59）
-        total_minutes = (22*60+59) - (8*60) + 1
+        # 计算剩余时段（8:00-21:59）
+        total_minutes = (21*60+59) - (8*60) + 1
         slot_duration = total_minutes // len(enabled_optional_apis)
         
         # 分配时段
@@ -880,7 +880,7 @@ class TianTimeSlotContentSensor(SensorEntity):
                 # 最后一个时段到22:59
                 time_slots[api_type] = {
                     "start": current_start, 
-                    "end": 22*60+59,
+                    "end": 21*60+59,
                     "name": f"{API_TYPES[api_type]['name']}时段"
                 }
             else:
