@@ -2,10 +2,11 @@
 
 DOMAIN = "tian_free"
 NAME = "天聚数行免费版"
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 
 CONF_API_KEY = "api_key"
 CONF_SCROLL_INTERVAL = "scroll_interval"
+CONF_ENABLED_APIS = "enabled_apis"
 
 # API endpoints
 JOKE_API_URL = "https://apis.tianapi.com/joke/index"
@@ -24,7 +25,21 @@ DEVICE_NAME = "信息查询"
 DEVICE_MANUFACTURER = "天聚数行"
 DEVICE_MODEL = "信息查询免费版"
 
-# 滚动内容类型列表
+# API类型定义
+API_TYPES = {
+    "morning": {"name": "早安心语", "required": True},
+    "evening": {"name": "晚安心语", "required": True},
+    "joke": {"name": "每日笑话", "required": False},
+    "poetry": {"name": "唐诗鉴赏", "required": False},
+    "songci": {"name": "最美宋词", "required": False},
+    "yuanqu": {"name": "精选元曲", "required": False},
+    "history": {"name": "简说历史", "required": False},
+    "sentence": {"name": "古籍名句", "required": False},
+    "couplet": {"name": "经典对联", "required": False},
+    "maxim": {"name": "英文格言", "required": False},
+}
+
+# 滚动内容类型列表（排除早安和晚安）
 SCROLL_CONTENT_TYPES = [
     "joke", "poetry", "songci", "yuanqu", 
     "history", "sentence", "couplet", "maxim"
