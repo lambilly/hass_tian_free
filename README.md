@@ -148,3 +148,7 @@ A: 在开发者工具中点击"重新加载天聚数行免费版"
 
 ---
 
+## 捐赠支持
+
+如果您觉得这个集成对您有帮助，欢迎扫描下方的二维码进行捐赠，以支持项目的持续开发和维护：
+<img width="368" height="500" alt="Image" src="https://github.com/user-attachments/assets/e48be0df-289f-4014-9f6d-d61212e0df44" />![Image](https://github.com/user-attachments/assets/81a870ea-3e8a-479a-986d-20c292a1bde2)
