@@ -1,10 +1,10 @@
 {
   "domain": "tian_free",
   "name": "天聚数行免费版",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "code_owners": ["@lambilly"],
-  "documentation": "https://github.com/lambilly/hass_tian_api",
-  "issue_tracker": "https://github.com/lambilly/hass_tian_api/issues",
+  "documentation": "https://github.com/lambilly/hass_tian_free",
+  "issue_tracker": "https://github.com/lambilly/hass_tian_free/issues",
   "requirements": [],
   "dependencies": [],
   "iot_class": "cloud_polling",

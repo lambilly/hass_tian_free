@@ -2,7 +2,7 @@
 
 DOMAIN = "tian_free"
 NAME = "天聚数行免费版"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 CONF_API_KEY = "api_key"
 CONF_SCROLL_INTERVAL = "scroll_interval"
